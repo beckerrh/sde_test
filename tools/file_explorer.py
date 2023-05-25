@@ -10,18 +10,18 @@ from ttkwidgets import CheckboxTreeview
 
 class FileExplorer(ttk.Frame):
 
-    def __init__(self, root):
+    def __init__(self, root, load_dir=None, onlydirs=False, rename=None):
         super().__init__(root)
-        self.treeview = CheckboxTreeview(self, show="tree")
-        self.treeview.grid(row=0, column=0, sticky="nsew")
-        self.treeview.tag_bind("fstag", "<<TreeviewOpen>>", self.item_opened)
-        # Make sure the treeview widget follows the root
-        # when resizing.
-        for w in (self, root):
-            w.rowconfigure(0, weight=1)
-            w.columnconfigure(0, weight=1)
-        self.grid(row=0, column=0, sticky="nsew")
+        self.rename = rename
+        if self.rename is None: self.rename = lambda x:x
+        self.onlydirs = onlydirs
         self.fsobjects: dict[str, pathlib.Path] = {}
+        self.treeview = CheckboxTreeview(self, show="tree")
+        if load_dir is not None: self.load_tree(load_dir)
+
+        self.treeview.tag_bind("fstag", "<<TreeviewOpen>>", self.item_opened)
+        self.treeview.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=10, padx=10)
+        self.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
     def safe_iterdir(self, path: pathlib.Path):
         """
@@ -39,7 +39,9 @@ class FileExplorer(ttk.Frame):
         """
         # iid = self.treeview.insert(parent, tk.END, text=name, tags=("fstag",),
         #     image=self.get_icon(path))
-        iid = self.treeview.insert(parent, tk.END, text=name, tags=("fstag",))
+        if self.onlydirs and path.is_file(): return
+        # print(f"{parent=} {self.rename(parent)=}")
+        iid = self.treeview.insert(parent, tk.END, text=self.rename(name), tags=("fstag",))
         self.fsobjects[iid] = path
         return iid
     
@@ -77,6 +79,6 @@ class FileExplorer(ttk.Frame):
 #---------------------------------------------------------------------
 if __name__ == "__main__":
     root = tk.Tk()
-    fe = FileExplorer(root)
-    fe.load_tree(pathlib.Path.home())
+    fe = FileExplorer(root, load_dir=pathlib.Path.home(), onlydirs=True)
+    # fe.load_tree(pathlib.Path.home())
     root.mainloop()

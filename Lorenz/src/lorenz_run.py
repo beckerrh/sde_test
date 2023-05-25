@@ -13,14 +13,16 @@ class LorenzRun():
         B = np.eye(3) + 0.5 * dt * self.A
         for it in range(1, nt):
             uold = u[it - 1]
+            b = 2 * uold + dt * self.l
             B[1, 2] = 0.5 * dt * uold[0]
             B[2, 1] = -0.5 * dt * uold[0]
-            id = 1-0.5*np.sqrt(dt)*q*noise[it]
-            B[0, 0] = id + dt*self.A[0,0]
-            B[1, 1] = id + dt*self.A[1,1]
-            B[2, 2] = id + dt*self.A[2,2]
-            b = 2 * uold + dt * self.l
-            u[it] = np.linalg.solve(B, b) - uold
+            C = B - 0.5*np.sqrt(dt)*q*noise[it]*np.eye(3)
+            u[it] = np.linalg.solve(C, b) - uold
+            # id = 1 - 0.5*np.sqrt(dt)*q*noise[it]
+            # B[0, 0] = id + dt*self.A[0,0]
+            # B[1, 1] = id + dt*self.A[1,1]
+            # B[2, 2] = id + dt*self.A[2,2]
+            # u[it] = np.linalg.solve(B, b) - uold
     def _run_cnsi(self, u, dt, nt, q, noise):
         B = np.eye(3) + 0.5 * dt * self.A
         for it in range(1, nt):
