@@ -41,44 +41,41 @@ class Poiseuille3d(Application):
         geom.add_physical(lat[1], label="101")
         geom.add_physical(lat[3], label="103")
         geom.add_physical(vol, label="10")
-# ================================================================c#
-def drivenCavity2d(h=0.1, mu=0.01):
-    with pygmsh.geo.Geometry() as geom:
+# ================================================================ #
+class DrivenCavity2d(Application):
+    def __init__(self, h=0.1, mu=0.003):
+        super().__init__(mu=mu, h=h, ncomp=2)
+        data = self.problemdata
+        # boundary conditions
+        data.bdrycond.set("Dirichlet", [1000, 1002])
+        data.bdrycond.fct[1002] = [lambda x, y, z: 1, lambda x, y, z: 0]
+        # parameters
+        data.params.scal_glob["mu"] = mu
+    #
+    def defineGeometry(self, geom, h):
         ms = [h*v for v in [1.,1.,0.2,0.2]]
         p = geom.add_rectangle(xmin=0, xmax=1, ymin=0, ymax=1, z=0, mesh_size=ms)
         geom.add_physical(p.surface, label="100")
         geom.add_physical(p.lines[2], label="1002")
         geom.add_physical([p.lines[0], p.lines[1], p.lines[3]], label="1000")
-        mesh = geom.generate_mesh()
-    data = ProblemData()
-    # boundary conditions
-    data.bdrycond.set("Dirichlet", [1000, 1002])
-    data.bdrycond.fct[1002] = [lambda x, y, z: 1, lambda x, y, z: 0]
-    # parameters
-    data.params.scal_glob["mu"] = mu
-    data.params.scal_glob["navier"] = mu
-    #TODO pass ncomp with mesh ?!
-    data.ncomp = 2
-    return SimplexMesh(mesh=mesh), data
-# ================================================================c#
-def drivenCavity3d(h=0.1, mu=0.01):
-    with pygmsh.geo.Geometry() as geom:
-        p = geom.add_rectangle(xmin=0, xmax=1, ymin=0, ymax=1, z=0, mesh_size=h)
+
+# ================================================================ #
+class DrivenCavity3d(Application):
+    def __init__(self, h=0.1, mu=0.003):
+        super().__init__(mu=mu, h=h, ncomp=3)
+        data = self.problemdata
+        data.bdrycond.set("Dirichlet", [100, 102])
+        data.bdrycond.fct[102] = [lambda x, y, z: 1, lambda x, y, z: 0, lambda x, y, z: 0]
+        # parameters
+        data.params.scal_glob["mu"] = mu
+    def defineGeometry(self, geom, h):
+        ms = [h*v for v in [1.,1.,0.1,0.1]]
+        p = geom.add_rectangle(xmin=0, xmax=1, ymin=0, ymax=1, z=0, mesh_size=ms)
         axis = [0, 0, 1]
         top, vol, lat = geom.extrude(p.surface, axis)
-        geom.add_physical(top, label="102")
-        geom.add_physical([p.surface, lat[0], lat[1], lat[2], lat[3]], label="100")
+        geom.add_physical(lat[2], label="102")
+        geom.add_physical([top, p.surface, lat[0], lat[1], lat[3]], label="100")
         geom.add_physical(vol, label="10")
-        mesh = geom.generate_mesh()
-    data = ProblemData()
-    # boundary conditions
-    data.bdrycond.set("Dirichlet", [100, 102])
-    data.bdrycond.fct[102] = [lambda x, y, z: 1, lambda x, y, z: 0, lambda x, y, z: 0]
-    # parameters
-    data.params.scal_glob["mu"] = mu
-    data.params.scal_glob["navier"] = mu
-    data.ncomp = 3
-    return SimplexMesh(mesh=mesh), data
 # ================================================================ #
 class BackwardFacingStep2d(Application):
     def __init__(self, mu=0.02, h=0.2):

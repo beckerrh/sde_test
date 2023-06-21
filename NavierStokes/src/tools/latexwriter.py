@@ -87,7 +87,7 @@ class TableData(object):
             for i in range(1,len(n)):
                 valorder[i] = abs(values[key][i]-values[key][i-1])
             values[key2] = valorder
-            self.valformat[key2] = "{:8.2f}"
+            self.valformat[key2] = "{:10.2e}"
     def computeReductionRate(self, dim, diff=False):
         n, values, keys = self.n, self.values, list(self.values.keys())
         if not isinstance(n[0],(int,float)): raise ValueError("n must be int or float")

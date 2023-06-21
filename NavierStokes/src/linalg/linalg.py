@@ -24,6 +24,9 @@ class MassMatrixIncompressible:
         return A
     def dot(self, du, d, u):
         # print(f"{d=}")
+        for i in range(self.app.ncomp):
+            self.app.vectorview.get(0,i,du)[:] += d * self.M @ self.app.vectorview.get(0,i,u)
+        return du
         n = self.M.shape[0]
         v, p = self.app._split(u)
         dv, dp = self.app._split(du)
@@ -51,10 +54,12 @@ def matrix2systemdiagonal(A, ncomp, stack_storage):
     """
     if stack_storage:
         n = A.shape[0]
-        N = sparse.coo_matrix(shape=(n,n))
+        # N = sparse.coo_matrix((n,n))
+        # N = sparse.dok_matrix((n,n))
+        N = sparse.csr_matrix((n,n))
         if ncomp==2:
-            return sparse.hstack(np.vestack(A,N), np.vstack(N,A))
-        return sparse.hstack(np.vestack(A, N, N), np.vstack(N, A, N), np.vstack(N, N, A))
+            return sparse.hstack([sparse.vstack([A,N]), sparse.vstack([N,A])])
+        return sparse.hstack([sparse.vstack([A, N, N]), sparse.vstack([N, A, N]), sparse.vstack([N, N, A])])
     A = A.tocoo()
     data, row, col = A.data, A.row, A.col
     n = A.shape[0]
@@ -196,7 +201,7 @@ class IterativeSolver():
         if hasattr(self, 'counter'):
             self.counter.reset()
             self.args['callback'] = self.counter
-        if self.scale and A and hasattr(A,'scale_A'):
+        if self.scale and A and hasattr(A,'scale_matrix'):
             A.scale_vec(b)
         self.args['b'] = b
         self.args['maxiter'] = maxiter
@@ -208,7 +213,7 @@ class IterativeSolver():
         else:
             self.niter = -1
         sol = res[0] if isinstance(res, tuple) else res
-        if self.scale and A and hasattr(A,'scale_A'):
+        if self.scale and A and hasattr(A,'scale_matrix'):
             A.scale_vec(sol)
         return sol
 
@@ -274,6 +279,7 @@ class ScipySolve(IterativeSolver):
         if len(kwargs.keys()):
             raise ValueError(f"*** unused arguments {kwargs=}")
     def update(self, A):
+        # print(f"update {self.__class__.__name__=}")
         self.matvec = splinalg.LinearOperator(shape=(self.n, self.n), matvec=A.matvec)
         self.preconditioner.update(A)
         self.M = splinalg.LinearOperator(shape=(self.n, self.n), matvec=self.preconditioner.solve)

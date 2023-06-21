@@ -10,8 +10,8 @@ from src.tools.comparemethods import CompareMethods
 
 #----------------------------------------------------------------#
 def test(dim, **kwargs):
-    class StokesWithExactSolution(src.models.application.Application):
-        def __init__(self, dim, exactsolution):
+    class StokesApplicationWithExactSolution(src.models.application.Application):
+        def __init__(self, dim, exactsolution, bctype):
             super().__init__(has_exact_solution=True)
             self.exactsolution = exactsolution
             data = self.problemdata
@@ -30,42 +30,32 @@ def test(dim, **kwargs):
                 colorsneu = [103]
                 colorsnav = [105]
                 colorsp = [101]
-                # colorsneu = colorsp = []
-            colorsnav = []
+            if bctype == "dir-neu":
+                colorsnav = []
+            elif bctype == "dir":
+                colorsnav = []
+                colorsneu = []
             colorsp = []
             # TODO Navier donne pas solution pour Linear (mais p)
             colorsdir = [col for col in colors if col not in colorsnav and col not in colorsp and col not in colorsneu]
-            # if 'strong' in femparams['dirichletmethod']:
-            #     if len(colorsnav): colorsdir.append(*colorsnav)
-            #     if len(colorsp): colorsdir.append(*colorsp)
-            #     colorsnav = []
-            #     colorsp = []
             data.bdrycond.set("Dirichlet", colorsdir)
             data.bdrycond.set("Neumann", colorsneu)
             data.bdrycond.set("Navier", colorsnav)
             data.bdrycond.set("Pressure", colorsp)
-            data.postproc.set(name='bdrypmean', type='bdry_pmean', colors=colorsneu)
+            data.postproc.set(name='bdrypmean', type='bdry_pmean', colors=colorsdir[0])
+            data.postproc.set(name='bdry_vmean', type='bdry_vmean', colors=colorsneu)
             data.postproc.set(name='bdrynflux', type='bdry_nflux', colors=colorsdir)
 
     exactsolution = kwargs.pop('exactsolution', 'Linear')
-    app = StokesWithExactSolution(dim, exactsolution)
-    disc_params = kwargs.pop('disc_params', {'dirichletmethod':'nitsche'})
+    app = StokesApplicationWithExactSolution(dim, exactsolution, bctype=kwargs.pop('bctype'))
     app.problemdata.params.scal_glob['mu'] = kwargs.pop('mu', 1)
     app.problemdata.params.scal_glob['navier'] = kwargs.pop('navier', 1)
-    paramsdict = {}
-    paramsdict['disc_params'] = [['nitsche',{'dirichletmethod':'nitsche', 'nitscheparam':10}]]
-    paramsdict['disc_params'].append(['strong',{'dirichletmethod':'strong'}])
-
-    modelargs= {'disc_params': disc_params}
-    modelargs= {'stack_storage': False}
-    modelargs['singleA']=False
+    paramsdict = kwargs.pop('paramsdict', {})
+    modelargs = kwargs.pop('modelargs', {})
     if 'linearsolver' in kwargs: modelargs['linearsolver'] = kwargs.pop('linearsolver')
-    # modelargs['disc_params'] = disc_params
-    modelargs['linearsolver'] = {'method': 'scipy_lgmres', 'maxiter': 100, 'prec': 'Chorin', 'disp': 0, 'rtol': 1e-10}
-    # modelargs['singleA'] = True
-    # modelargs['scale_ls'] = True
-
-    modelargs['mode'] = 'newton'
+    linsolver_def = {'method': 'scipy_lgmres', 'maxiter': 100, 'prec': 'Chorin', 'disp': 0, 'rtol': 1e-3}
+    modelargs['linearsolver'] = kwargs.pop('linearsolver', linsolver_def)
+    modelargs['newton_rtol'] = 1e-12
     comp =  CompareMethods(application=app, paramsdict=paramsdict, model=Stokes, modelargs=modelargs, **kwargs)
     return comp.compare()
 
@@ -73,11 +63,22 @@ def test(dim, **kwargs):
 
 #================================================================#
 if __name__ == '__main__':
-    # test(dim=3, exactsolution="Linear", niter=3, plotsolution=True)
-    # test(dim=2, exactsolution="Linear", niter=3, plotsolution=True)
-    test(dim=2, exactsolution=[["-y","x"],"0"], niter=3, plotsolution=True)
+    # test strong - weak
+    paramsdict = {'disc_params':[['nitsche',{'dirichletmethod':'nitsche'}], ['strong',{'dirichletmethod':'strong'}]]}
+    # test(dim=2, exactsolution="Linear", niter=3, plotsolution=True, paramsdict=paramsdict, bctype="dir-neu")
+    # test(dim=3, exactsolution="Linear", niter=3, plotsolution=True, paramsdict=paramsdict, bctype="dir-neu")
 
-    # test(dim=2, exactsolution=[["x**2-y","-2*x*y+x**2"],"x*y"], dirichletmethod='nitsche', niter=6, plotsolution=False, linearsolver='iter_gcrotmk')
+    modelargs= {'stack_storage': False}
+    modelargs['singleA']=True
+    modelargs['mode']='newton'
+    # test(dim=2, exactsolution="Linear", niter=4, plotsolution=True, modelargs=modelargs, bctype="dir")
+    test(dim=2, exactsolution=[["sin(pi*x)**2*sin(pi*y)", "-sin(pi*x)*sin(pi*y)**2"], "cos(pi*x)+cos(pi*y)"], niter=6, plotsolution=True, modelargs=modelargs, bctype="dir")
+    # modelargs['mode']='dynamic'
+    # test(dim=2, exactsolution=[["cos(t)*sin(pi*x)**2*sin(pi*y)", "-cos(t)*sin(pi*x)*sin(pi*y)**2"], "cos(t)*cos(pi*x)+cos(pi*y)"], niter=6, plotsolution=True, modelargs=modelargs, bctype="dir")
+
+    # test(dim=2, exactsolution=[["-y","x"],"2"], niter=3, plotsolution=True)
+    # test(dim=2, exactsolution=[["x**2-y","-2*x*y+x**2"],"x*y"], niter=5, plotsolution=False)
+
     # test(dim=3, exactsolution=[["x**2-y+2","-2*x*y+x**2","x+y"],"x*y*z"], dirichletmethod='nitsche', niter=5, plotsolution=False, linearsolver='iter_gcrotmk')
     # test(dim=2, exactsolution="Quadratic", niter=7, dirichletmethod='nitsche', plotsolution=True, linearsolver='spsolve')
     # test(dim=2, exactsolution=[["1.0","0.0"],"10"], niter=3, dirichletmethod='nitsche', plotsolution=True, linearsolver='spsolve')

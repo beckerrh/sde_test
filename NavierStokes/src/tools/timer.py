@@ -3,10 +3,10 @@ import time
 #=================================================================#
 class Timer():
     def __del__(self):
-        if self.verbose>1: print(self)
-    def __init__(self, name='', verbose=0):
+        if self.verbose_del: print(self)
+    def __init__(self, name='', verbose=False, verbose_del=False):
         self.name = name
-        self.verbose = verbose
+        self.verbose, self.verbose_del = verbose, verbose_del
         self.tlast = time.time()
         self.nameslast = 'none'
         self.data = {}

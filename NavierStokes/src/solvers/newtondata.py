@@ -35,9 +35,18 @@ class IterationData:
         all = [f"{k}: {v}" for k,v in self.__dict__.items()]
         return ' '.join(all)
     def __init__(self, resnorm, **kwargs):
+        self.calls = 0
         self.totaliter, self.totalliniter = 0, 0
         self.reset(resnorm)
+        self.calls = 0
+        self.bad_convergence_count = 0
+    def niter_mean(self):
+        if not self.calls: return 1
+        return self.totaliter/self.calls
+    def niter_lin_mean(self):
+        return np.mean(np.array(self.liniter))
     def reset(self, resnorm):
+        self.calls += 1
         if hasattr(self, 'iter'): self.totaliter += self.iter
         if hasattr(self, 'liniter'): self.totalliniter += np.sum(self.liniter)
         self.liniter, self.dxnorm, self.resnorm, self.step = [], [], [], []

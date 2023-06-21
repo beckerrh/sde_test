@@ -114,7 +114,8 @@ def newton(x0, f, computedx=None, sdata=None, verbose=False, jac=None, maxiter=N
     atol, rtol, atoldx, rtoldx = sdata.atol, sdata.rtol, sdata.atoldx, sdata.rtoldx
     maxiter, divx = sdata.maxiter, sdata.divx
     x = np.asarray(x0)
-    assert x.ndim == 1
+    if not x.ndim == 1:
+        raise ValueError(f"{x.shape=}")
     # n = x.shape[0]
     if not computedx:  assert jac
     xnorm = np.linalg.norm(x)
@@ -170,6 +171,7 @@ def newton(x0, f, computedx=None, sdata=None, verbose=False, jac=None, maxiter=N
         iterdata.bad_convergence = False
         if iterdata.rhodx>sdata.rho_aimed:
             iterdata.bad_convergence = True
+            iterdata.bad_convergence_count += 1
             matsymb = 'M'
         if verbose:
             print(f"{name:20s} {iterdata.iter:3d} {resnorm:9.3e} {iterdata.dxnorm[-1]:9.3e} {xnorm:9.3e} {iterdata.rhodx:4.2f} {iterdata.rhor:4.2f} {liniter:3d} {step:4.2f} {matsymb:1s}")

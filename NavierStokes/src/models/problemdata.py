@@ -211,9 +211,9 @@ class Results(object):
         self.data = {}
         self.info = {}
         if nframes:
-            self.time = np.zeros(nframes)
-            self.iter = np.zeros(nframes)
-            self.liniter = np.zeros(nframes)
+            self.time = np.zeros(nframes+1)
+            self.iter = np.zeros(nframes+1)
+            self.liniter = np.zeros(nframes+1)
             self.postprocscal = {}
     def __repr__(self):
         repr = f"Results info: {self.info}\n"
@@ -240,32 +240,16 @@ class Results(object):
                 self.postprocscal[k] = np.zeros(nframes)
         for k,v in data['scalar'].items():
             self.postprocscal[k][iframe] = v
-
-        # if not len(self.data.keys()):
-        #     nframes = len(self.time)
-        #     for k, v in data.items():
-        #         assert isinstance(v, dict)
-        #         self.data[k] = {}
-        #         for k2, v2 in v.items():
-        #             # print(f"{k2=} {type(v2)=}")
-        #             if isinstance(v2, np.floating):
-        #                 self.data[k][k2] = np.zeros(nframes)
-        #             else:
-        #                 if not isinstance(v2, np.ndarray): raise ValueError(f"for {k2} is unknown {type(v2)}")
-        #                 if sum(v2.shape)==1:
-        #                     self.data[k][k2] = np.zeros(nframes)
-        #                 else:
-        #                     self.data[k][k2] = np.zeros(shape=(nframes,*v2.shape))
-        # for k,v in data.items():
-        #     assert isinstance(v,dict)
-        #     assert k in self.data.keys()
-        #     for k2,v2 in v.items():
-        #         # assert isinstance(v2, np.ndarray)
-        #         self.data[k][k2][iframe,...] = v2
+    def enrolPPscalar(self, keys):
+        for k in keys:
+            self.postprocscal[k] = []
+    def addPPscalar(self, postprocscal):
+        for k,v in postprocscal.items():
+            self.postprocscal[k].append(v)
 
     def save(self, dirname):
         np.save(os.path.join(dirname, f"time"), self.time)
         np.save(os.path.join(dirname, f"iter"), self.iter)
         np.save(os.path.join(dirname, f"liniter"), self.liniter)
         for k,v in self.postprocscal.items():
-            np.save(os.path.join(dirname, "postproc_"+k), v)
+            np.save(os.path.join(dirname, "postproc_"+k), np.array(v))

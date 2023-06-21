@@ -58,7 +58,7 @@ class Model(object):
         self.disc_params = kwargs.pop('disc_params', {})
         self.createFem()
         self.setMesh(self.application.createMesh())
-        print(f"{self.__class__.__name__} {self.mesh=} {self.linearsolver=}")
+        print(f"{self.__class__.__name__} {self.stack_storage=} {self.singleA=} {self.mesh=} {self.linearsolver=}")
         if not hasattr(self,'scale_ls'):
             self.scale_ls = kwargs.pop('scale_ls', True)
         if 'newton_stopping_parameters' in kwargs:
@@ -71,7 +71,10 @@ class Model(object):
             self.newton_stopping_parameters.addname = self.linearsolver
         else:
             self.newton_stopping_parameters.addname = self.linearsolver['method']
-        datadir_def =  pathlib.Path.home().joinpath( 'data_dir', f"_{self.__class__.__name__}"+f"_{self.application.__class__.__name__}")
+        datadir_def_name = f"{self.__class__.__name__}"+f"_{self.application.__class__.__name__}"
+        if 'datadir_add' in kwargs:
+            datadir_def_name += kwargs.pop('datadir_add')
+        datadir_def =  pathlib.Path.home().joinpath( 'data_dir', datadir_def_name)
         self.datadir = kwargs.pop('datadir', datadir_def)
         if kwargs.pop("clean_data",True):
             try: shutil.rmtree(self.datadir)
@@ -90,10 +93,15 @@ class Model(object):
         self.mesh = mesh
         if self.verbose: print(f"{self.mesh=}")
         self._setMeshCalled = True
+        if hasattr(self, 'LS'):
+            del self.LS
         if hasattr(self,'_generatePDforES') and self._generatePDforES:
             self.generatePoblemDataForAnalyticalSolution()
             self._generatePDforES = False
-    def solve(self): return self.static(method=self.mode)
+    def solve(self):
+        if self.mode=='dynamic':
+            return self.dynamic()
+        return self.static(method=self.mode)
     # def setParameter(self, paramname, param):
     #     assert 0
     def dirichletfct(self):
@@ -117,6 +125,8 @@ class Model(object):
         # print("self.problemdata.solexact", self.problemdata.solexact)
         solexact = self.problemdata.solexact
         self.problemdata.params.fct_glob['rhs'] = self.defineRhsAnalyticalSolution(solexact)
+        if hasattr(self, 'time'):
+            self.problemdata.params.fct_glob['initial_condition'] = self.defineInitialConditionAnalyticalSolution(solexact)
         for color in self.mesh.bdrylabels:
             if color in bdrycond.type and bdrycond.type[color] in ["Dirichlet","dirichlet"]:
                 bdrycond.fct[color] = self.dirichletfct()
@@ -149,18 +159,19 @@ class Model(object):
             raise ValueError(msg)
         return arr
     def initsolution(self, b):
+        # print(f"{type(b)=}")
         if isinstance(b,tuple):
             raise NotImplementedError()
             return [np.copy(bi) for bi in b]
-        return np.copy(b)
+        return b.copy()
     def computelinearSolver(self, A):
         if isinstance(self.linearsolver,str):
             args = {'method': self.linearsolver}
         else:
             args = self.linearsolver.copy()
         if args['method'] != 'spsolve':
-            if self.scale_ls and hasattr(A,'scale_A'):
-                A.scale_A()
+            if self.scale_ls:
+                A.scale_matrix()
                 args['scale'] = self.scale_ls
             args['matrix'] = A
             if hasattr(A,'matvec'):
@@ -176,18 +187,20 @@ class Model(object):
         u = kwargs.pop('u',None)
         if 'maxiter' in kwargs: self.newton_stopping_parameters.maxiter = kwargs.pop('maxiter')
         if 'rtol' in kwargs: self.newton_stopping_parameters.rtol = kwargs.pop('rtol')
-        # self.timer.reset_all()
+        self.timer.reset_all()
         result = src.models.problemdata.Results()
         if not self._setMeshCalled: self.setMesh(self.mesh)
         self.timer.add('setMesh')
-        self.b = self.computeRhs()
+        self.b = kwargs.pop('b',self.computeRhs())
+        # self.b = self.computeRhs()
         # raise ValueError(f"{self.b.shape=}")
         if u is None:
             u = self.initsolution(self.b)
         self.timer.add('rhs')
         if method == 'linear':
             try:
-                self.A = self.computeMatrix()
+                if not hasattr(self,'A'):
+                    self.A = self.computeMatrix()
                 self.timer.add('matrix')
                 self.LS = self.computelinearSolver(self.A)
                 self.timer.add('solver')
@@ -253,7 +266,8 @@ class Model(object):
         fp1 = self.fem.interpolate(ic)
         if interpolate:
             return fp1
-        self.Mass = self.fem.computeMassMatrix()
+        if not hasattr(self, 'Mass'):
+            self.Mass = self.fem.computeMassMatrix()
         b = np.zeros(self.fem.nunknowns())
         self.fem.massDot(b, fp1)
         u, niter = self.solvelinear(self.Mass, b, u=fp1)
@@ -262,35 +276,37 @@ class Model(object):
         return self.computeForm(u)-rhs + self.Mass.dot(u)/(self.theta * self.dt)
     def computeMatrixConstant(self, coeffmass):
         return self.computeMatrix(coeffmass=coeffmass)
-    def rhs_dynamic(self, rhs, u, Aimp, time, dt, theta):
+    def rhs_dynamic(self, rhs, u, Aconst, time, dt, theta, semi_implicit):
         rhs += 1 / (theta * theta * dt) * self.Mass.dot(u)
-        rhs += (theta-1)/theta * Aimp.dot(u)
+        rhs += (theta-1)/theta * Aconst.dot(u)
         # rhs2 = self.computeRhs()
         rhs += (1 / theta) * self.computeRhs()
+    def newMatrix(self, u):
+        if not hasattr(self, 'timeiter'):
+            coeffmass = None
+        else:
+            coeffmass = self.coeffmass
+        self.A = self.computeMatrix(u=u, coeffmass=coeffmass)
+        self.A.scale_matrix()
+        if hasattr(self, 'LS'):
+            # self.LS = self.computelinearSolver(self.A)
+            self.LS.update(self.A)
+        else:
+            self.LS = self.computelinearSolver(self.A)
     def computeDx(self, b, u, info):
         computeMatrix = False
-        rtol = 1e-5
         if (not hasattr(self, 'timeiter')) and (info.iter==0 or info.bad_convergence):
             computeMatrix=True
         if hasattr(self, 'timeiter') and self.timeiter==0 and info.iter==0:
             computeMatrix=True
         elif hasattr(self, 'timeiter') and info.bad_convergence:
             computeMatrix = True
+        if computeMatrix:
+            self.newMatrix(u)
+        rtol = 1e-5
         if hasattr(info,'rhor'):
             rtol = min(0.01, info.rhor)
             rtol = max(rtol, info.tol_missing)
-        if computeMatrix:
-            if not hasattr(self, 'timeiter'):
-                coeffmass=None
-            else:
-                coeffmass=self.coeffmass
-            self.A = self.computeMatrix(u=u, coeffmass=coeffmass)
-            if hasattr(self,'LS'):
-                # self.LS = self.computelinearSolver(self.A)
-                self.A.scale_A()
-                self.LS.update(self.A)
-            else:
-                self.LS = self.computelinearSolver(self.A)
         try:
             du = self.LS.solve(A=self.A, b=b, rtol=rtol)
             niter = self.LS.niter
@@ -315,7 +331,8 @@ class Model(object):
         :return: results with data per frame
         """
         from functools import partial
-
+        if not self.vectorview.n() == u0.size:
+            raise ValueError(f"needs u0 of shape {self.vectorview.ncomps=}")
         if t_span[0]>=t_span[1]: raise ValueError(f"something wrong in {t_span=}")
         import math
         callback = kwargs.pop('callback', None)
@@ -323,10 +340,13 @@ class Model(object):
         dtmin = kwargs.pop('dtmin', 1e-10*dt)
         theta = kwargs.pop('theta', 0.8)
         verbose = kwargs.pop('verbose', True)
-        maxiternewton = kwargs.pop('maxiternewton', 10)
+        newton_verbose = kwargs.pop('newton_verbose', True)
+        maxiternewton = kwargs.pop('maxiternewton', 4)
         rtolnewton = kwargs.pop('rtolnewton', 1e-3)
+        rtolsemi_imp = kwargs.pop('rtolsemi_imp', 1e-8)
         sdata = kwargs.pop('sdata', src.solvers.newtondata.StoppingParamaters(maxiter=maxiternewton, rtol=rtolnewton))
         output_vtu = kwargs.pop('output_vtu', False)
+        semi_implicit = kwargs.pop('semi_implicit', False)
         if len(kwargs):
             raise ValueError(f"unused arguments: {kwargs.keys()}")
 
@@ -351,28 +371,59 @@ class Model(object):
                 self.pyamgml = self.build_pyamg(Aconst)
         self.theta, self.dt = theta, dt
         times = np.linspace(t_span[0], t_span[1], nframes+1)
-        info_new = None
         count_smallres = 0
         self.timeiter = 0
+        info_new = src.solvers.newtondata.IterationData(rtolsemi_imp)
+        if verbose:
+            print(30*"*" + f" {theta=} "+30*"*")
+            print(f"*** {'t':12s} {'it':6s} {'dt':6s} {'n_lin_av':8s} {'n_nl_av':8s} {'n_bad':6s} {'nnew':4s}")
         for iframe in range(nframes):
-            if verbose: print(f"*** {self.time=} {iframe=} {theta=} {self.dt=}")
+            info_new.totaliter = 0
+            info_new.totalliniter = 0
+            info_new.bad_convergence_count = 0
+            info_new.calls = 0
+            pp = self.postProcess(u)
+            if hasattr(self.application, "changepostproc"):
+                self.application.changepostproc(pp['scalar'])
+            result.addData(iframe, pp, time=self.time, iter=info_new.totaliter, liniter=info_new.totalliniter)
+            if callback: callback(self.time, u)
+            self.save(u=u, iter=iframe)
+            if output_vtu:
+                data = self.sol_to_data(u, single_vector=False)
+                filename = "sol" + f"_{iframe:05d}" + ".vtu"
+                self.mesh.write(self.datadir/filename, data=data)
             while self.time<times[iframe+1]:
                 self.rhs.fill(0)
-                self.rhs_dynamic(self.rhs, u, Aconst, self.time, dt, theta)
-                # print(f"{np.linalg.norm(self.rhs)=} {np.linalg.norm(u)=}")
-                self.timer.add('rhs')
                 self.time += dt
+                self.application.time = self.time
+                self.rhs_dynamic(self.rhs, u, Aconst, self.time, dt, theta, semi_implicit)
+                # print(f"{np.linalg.norm(self.rhs)=} {np.linalg.norm(u)=}")
+                # self.timer.add('rhs')
                 self.uold = u.copy()
-                u, info_new = src.solvers.newton.newton(u, f=partial(self.defect_dynamic, self.rhs),
+                solver_success = True
+                if semi_implicit:
+                   self.newMatrix(u)
+                   u = self.LS.solve(A=self.A, b=self.rhs, rtol=rtolsemi_imp, verbose=True)
+                   info_new.liniter.append(self.LS.niter)
+                   if self.LS.niter == self.LS.maxiter:
+                       print(f"*** solver failure {rtolsemi_imp=} {self.LS.niter=}")
+                       solver_success = False
+                else:
+                    u, info_new = src.solvers.newton.newton(u, f=partial(self.defect_dynamic, self.rhs),
                                                             computedx=self.computeDx,
-                                                            verbose=True, sdata=sdata, iterdata=info_new)
-                self.timer.add('newton')
-                if not info_new.success and info_new.failure in ["residual too small","correction too small"]:
-                    count_smallres += 1
-                    if count_smallres == 3:
-                        print("got stationary solution")
-                        return result
-                elif not info_new.success:
+                                                            verbose=newton_verbose, sdata=sdata, iterdata=info_new)
+                    # self.timer.add('newton')
+                    if not info_new.success and info_new.failure in ["residual too small","correction too small"]:
+                        count_smallres += 1
+                        if count_smallres == 3:
+                            print("got stationary solution")
+                            return result
+                    elif not info_new.success:
+                        solver_success = False
+                    else:
+                        count_smallres = 0
+                # self.timer.add('solve')
+                if not solver_success:
                     u = self.uold
                     self.time -= dt
                     dtold = dt
@@ -384,27 +435,38 @@ class Model(object):
                     self.coeffmass = 1 / dt / theta
                     Aconst = self.computeMatrixConstant(coeffmass=self.coeffmass, coeffmassold=coeffmassold)
                     self.A = self.computeMatrix(u=u, coeffmass=self.coeffmass)
-                    self.LS = self.update(self.A)
-                    # self.LS = self.computelinearSolver(self.A)
+                    self.A.scale_matrix()
+                    self.LS.update(self.A)
                     print(f"*** {info_new.failure=} {dtold=} {dt=}")
                     info_new.success = True
-                else:
-                    count_smallres = 0
+
                 # self.timer.add('solve')
                 self.timeiter += 1
-            info_new.totaliter = 0
-            info_new.totalliniter = 0
-            pp = self.postProcess(u)
-            if hasattr(self.application, "changepostproc"):
-                self.application.changepostproc(pp['scalar'])
-            result.addData(iframe, pp, time=self.time, iter=info_new.totaliter, liniter=info_new.totalliniter)
-            if callback: callback(self.time, u)
-            # save data
-            self.save(u=u, iter=iframe)
-            if output_vtu:
-                data = self.sol_to_data(u, single_vector=False)
-                filename = "sol" + f"_{iframe:05d}" + ".vtu"
-                self.mesh.write(self.datadir/filename, data=data)
+            if verbose:
+                print(f"*** {self.time:9.3e} {iframe:6d} {self.dt:8.2e} {info_new.niter_lin_mean():8.2f} {info_new.niter_mean():8.2f} {info_new.bad_convergence_count:8.2f} {info_new.calls:3d}")
+            # info_new.totaliter = 0
+            # info_new.totalliniter = 0
+            # pp = self.postProcess(u)
+            # if hasattr(self.application, "changepostproc"):
+            #     self.application.changepostproc(pp['scalar'])
+            # result.addData(iframe, pp, time=self.time, iter=info_new.totaliter, liniter=info_new.totalliniter)
+            # if callback: callback(self.time, u)
+            # self.save(u=u, iter=iframe)
+            # if output_vtu:
+            #     data = self.sol_to_data(u, single_vector=False)
+            #     filename = "sol" + f"_{iframe:05d}" + ".vtu"
+            #     self.mesh.write(self.datadir/filename, data=data)
+        iframe += 1
+        pp = self.postProcess(u)
+        if hasattr(self.application, "changepostproc"):
+            self.application.changepostproc(pp['scalar'])
+        result.addData(iframe, pp, time=self.time, iter=info_new.totaliter, liniter=info_new.totalliniter)
+        if callback: callback(self.time, u)
+        self.save(u=u, iter=iframe)
+        if output_vtu:
+            data = self.sol_to_data(u, single_vector=False)
+            filename = "sol" + f"_{iframe:05d}" + ".vtu"
+            self.mesh.write(self.datadir / filename, data=data)
         result.save(self.datadir)
         return result
 
@@ -412,11 +474,12 @@ class Model(object):
         # TODO: passing time
         """
         u_t + A u = f, u(t_0) = u_0
-        M(u^{n+1}-u^n)/dt + a Au^{n+1} + (1-a) A u^n = f
+        M(u^{n+1}-u^n)/dt + a Au^{n+1} + (1-a) A u^n = (f^{n+1}-f^n)/2
         (M/dt+aA) u^{n+1} =  f + (M/dt -(1-a)A)u^n
                           =  f + 1/a (M/dt) u^n - (1-a)/a (M/dt+aA)u^n
-        (M/(a*dt)+A) u^{n+1} =  (1/a)*f + (M/(a*dt)-(1-a)/a A)u^n
-                             =  (1/a)*f + 1/(a*a*dt) M u^n  - (1-a)/a*(M/(a*dt)+A)u^n
+        C := (M/dt+aA)
+        C u^{n+1} =  (1/a)*f + (M/(a*dt)-(1-a)/a A)u^n
+                  =  (1/a)*f + 1/(a*a*dt) M u^n  + (a-1)/a* C * u^n
         :param u0: initial condition
         :param t_span: time interval bounds (tuple)
         :param nframes: number of frames to store
@@ -475,12 +538,22 @@ class Model(object):
             result.addData(iframe, self.postProcess(u), time=self.time, iter=niterslinsol.mean())
             if callback: callback(self.time, u)
         return result
+    def save(self, u, iter=None, datadir=None, name= "sol", add=''):
+        if datadir is None: datadir=self.datadir
+        if add: name += add
+        if iter is not None: name += f"_{iter:05d}"
+        np.save(datadir/name, u)
+    def load(self, iter=None, datadir=None, name= "sol", add=''):
+        if add: name += add
+        if iter is not None: name += f"_{iter:05d}"
+        if datadir is None: datadir=self.datadir
+        name += ".npy"
+        return np.load(datadir/name)
+    def get_t(self, datadir=None):
+        if datadir is None: datadir=self.datadir
+        times = np.load(self.datadir / "time.npy")
+        return times
 
-    def save(self, u, iter=None):
-        solname = "sol"
-        if iter is not None: solname += f"_{iter:05d}"
-        # filename = os.path.join(self.dirname, solname)
-        np.save(self.datadir/solname, u)
     def get_postprocs_dynamic(self):
         # filename = os.path.join(self.dirname, "time.npy")
         data = {'time': np.load(self.datadir/"time.npy"), 'postproc':{}}
@@ -499,19 +572,19 @@ class Model(object):
             u = kwargs.pop('u', None)
             if u is None:
                 # filename = os.path.join(self.dirname, solnamebase + ".npy")
-                u = np.load(self.datadir / solnamebase + ".npy")
+                u = np.load(self.datadir / (solnamebase + ".npy"))
             data = self.sol_to_data(u, single_vector=False)
             # filename = os.path.join(self.dirname, solnamebase + ".vtu")
             # self.mesh.write(filename, data=data)
-            self.mesh.write(self.datadir / solnamebase + ".vtu", data=data)
+            self.mesh.write(self.datadir / (solnamebase + ".vtu"), data=data)
             return
         for iter in range(niter):
             solname = solnamebase + f"_{iter:05d}"
             # filename = os.path.join(self.dirname, solname + ".npy")
-            u = np.load(self.datadir / solnamebase + ".npy")
+            u = np.load(self.datadir / (solnamebase + ".npy"))
             data = self.sol_to_data(u, single_vector=False)
             # filename = os.path.join(self.dirname, solname + ".vtu")
-            self.mesh.write(self.datadir/solname + ".vtu", data=data)
+            self.mesh.write(self.datadir/(solname + ".vtu"), data=data)
 
     def plot(self, **kwargs):
         u = kwargs.pop('u', None)
@@ -527,10 +600,11 @@ class Model(object):
         data = self.sol_to_data(u)
         # raise ValueError(f"{data=} {solname=}")
         import matplotlib.pyplot as plt
+        from matplotlib.figure import figaspect
         if fig is None:
             if gs is not None:
                 raise ValueError(f"got gs but no fig")
-            fig = plt.figure(constrained_layout=True)
+            fig = plt.figure(constrained_layout=True, figsize=figaspect(2))
             appname = kwargs.pop('title', self.application.__class__.__name__)
             fig.suptitle(f"{appname}")
         if gs is None:
@@ -550,45 +624,3 @@ class Model(object):
 
 if __name__ == '__main__':
     raise ValueError("unit test to be written")
-
-
-    # def solvelinear(self, A, b, u=None, verbose=0, disp=0):
-    #     if spsp.issparse(A):
-    #         if len(b.shape)!=1 or len(A.shape)!=2 or b.shape[0] != A.shape[0]:
-    #             raise ValueError(f"{A.shape=} {b.shape=}")
-    #     if self.linearsolver is None: solver = self.linearsolver
-    #     if not hasattr(self, 'info'): self.info={}
-    #     if self.linearsolver not in self.linearsolvers: solver = "spsolve"
-    #     if self.linearsolver == 'spsolve':
-    #         return splinalg.spsolve(A, b), 1
-    #         return splinalg.spsolve(A, b, permc_spec='COLAMD'), 1
-    #     elif self.linearsolver in ['gmres','lgmres','bicgstab','cg','gcrotmk']:
-    #         if self.linearsolver == 'cg':
-    #             def gaussSeidel(A):
-    #                 dd = A.diagonal()
-    #                 D = spsp.dia_matrix(A.shape)
-    #                 D.setdiag(dd)
-    #                 L = spsp.tril(A, -1)
-    #                 U = spsp.triu(A, 1)
-    #                 return splinalg.factorized(D + L)
-    #             M2 = gaussSeidel(A)
-    #         else:
-    #             # defaults: drop_tol=0.0001, fill_factor=10
-    #             M2 = splinalg.spilu(A.tocsc(), drop_tol=0.1, fill_factor=3)
-    #         M = splinalg.LinearOperator(A.shape, lambda x: M2.solve(x))
-    #         counter = src.tools.iterationcounter.IterationCounter(name=self.linearsolver, disp=disp)
-    #         args=""
-    #         cmd = "splinalg.{}(A, b, M=M, tol=1e-14, callback=counter {})".format(self.linearsolver,args)
-    #         u, info = eval(cmd)
-    #         # print(f"{u=}")
-    #         return u, counter.niter
-    #     elif self.linearsolver == 'pyamg':
-    #         if not hasattr(self, 'pyamgml'):
-    #             self.pyamgml = self.build_pyamg(A)
-    #         maxiter = 100
-    #         u, res = self.solve_pyamg(self.pyamgml, b, u, maxiter)
-    #         if len(res) >= maxiter: raise ValueError(f"***no convergence {res=}")
-    #         if(verbose): print('niter ({}) {:4d} ({:7.1e})'.format(solver, len(res),res[-1]/res[0]))
-    #         return u, len(res)
-    #     else:
-    #         raise NotImplementedError("unknown solve '{}'".format(self.linearsolver))

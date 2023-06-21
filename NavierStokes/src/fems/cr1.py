@@ -86,20 +86,20 @@ class CR1(p1general.P1general):
         for color in colorsflux:
             bdrydata.facesdirflux[color] = self.mesh.bdrylabels[color]
         return bdrydata
-    def computeRhsNitscheDiffusion(self, nitsche_param, b, diffcoff, colorsdir, udir=None, bdrycondfct=None, coeff=1, lumped=False):
+    def computeRhsNitscheDiffusion(self, nitsche_param, b, diffcoff, colors, udir=None, bdrycondfct=None, coeff=1, lumped=False):
         # if self.params_str['dirichletmethod'] != 'nitsche': return
         if udir is None:
-            udir = self.interpolateBoundary(colorsdir, bdrycondfct)
+            udir = self.interpolateBoundary(colors, bdrycondfct)
         # nitsche_param=self.params_float['nitscheparam']
         if not udir.shape[0] == self.mesh.nfaces:
             raise ValueError(f"{udir.shape[0]=} {self.mesh.nfaces=}")
-        dim, faces = self.mesh.dimension, self.mesh.bdryFaces(colorsdir)
+        dim, faces = self.mesh.dimension, self.mesh.bdryFaces(colors)
         cells = self.mesh.cellsOfFaces[faces,0]
         normalsS = self.mesh.normals[faces][:,:dim]
         dS, dV = np.linalg.norm(normalsS,axis=1), self.mesh.dV[cells]
         mat = np.einsum('f,fi,fji->fj', coeff*udir[faces]*diffcoff[cells], normalsS, self.cellgrads[cells, :, :dim])
         np.add.at(b, self.mesh.facesOfCells[cells], -mat)
-        self.massDotBoundary(b, f=udir, colors=colorsdir, coeff=coeff*nitsche_param*diffcoff[cells] * dS/dV, lumped=lumped)
+        self.massDotBoundary(b, f=udir, colors=colors, coeff=coeff*nitsche_param*diffcoff[cells] * dS/dV, lumped=lumped)
     def computeFormNitscheDiffusion(self, nitsche_param, du, u, diffcoff, colorsdir):
         # if self.params_str['dirichletmethod'] != 'nitsche': return
         # nitsche_param=self.params_float['nitscheparam']
@@ -398,6 +398,7 @@ class CR1(p1general.P1general):
     def computeMatrixJump(self, betart, mode='primal', monotone=False):
         dim, dV, nfaces, ndofs = self.mesh.dimension, self.mesh.dV, self.mesh.nfaces, self.nunknowns()
         nloc, dofspercell = self.nlocal(), self.dofspercell()
+        if not hasattr(self.mesh,'innerfaces'): self.mesh.constructInnerFaces()
         innerfaces = self.mesh.innerfaces
         ci0 = self.mesh.cellsOfInteriorFaces[:,0]
         ci1 = self.mesh.cellsOfInteriorFaces[:,1]

@@ -1,7 +1,5 @@
-# in shell
 import pathlib, sys
 import matplotlib.pyplot as plt
-
 SCRIPT_DIR = str(pathlib.Path(__file__).parent.parent)
 sys.path.insert(0,SCRIPT_DIR)
 from src.tools import timer
@@ -25,7 +23,7 @@ def getModel(**kwargs):
         model = Stokes(application=application, disc_params=disc_params)
     else:
         # model = NavierStokes(mesh=mesh, problemdata=data, hdivpenalty=10)
-        model = NavierStokes(application=application, disc_params=disc_params, stack_storage=True)
+        model = NavierStokes(application=application, disc_params=disc_params, stack_storage=False)
     return model
 
 
@@ -72,12 +70,18 @@ def static(**kwargs):
 def dynamic(**kwargs):
     model = getModel(**kwargs)
     appname  = model.application.__class__.__name__
-    stokes = Stokes(application=model.application)
+    stokes = Stokes(application=model.application, stack_storage=False)
     result, u = stokes.solve()
     T = kwargs.pop('T', 200)
     dt = kwargs.pop('dt', 0.52)
     nframes = kwargs.pop('nframes', int(T/2))
-    result = model.dynamic(u, t_span=(0, T), nframes=nframes, dt=dt, theta=0.8, rtolnewton=1e-3, output_vtu=True)
+    kwargs_dynamic = {'t_span':(0, T), 'nframes':nframes, 'dt':dt, 'theta':0.8, 'output_vtu': False}
+    if kwargs.pop('semi_implicit', False):
+        kwargs_dynamic['semi_implicit'] = True
+    kwargs_dynamic['newton_verbose'] = False
+
+    # result = model.dynamic(u, t_span=(0, T), nframes=nframes, dt=dt, theta=0.8, rtolnewton=1e-3, output_vtu=True)
+    result = model.dynamic(u, **kwargs_dynamic)
     print(f"{model.timer=}")
     print(f"{model.newmatrix=}")
     fig = plt.figure(constrained_layout=True)
@@ -101,6 +105,9 @@ def dynamic(**kwargs):
 #================================================================#
 if __name__ == '__main__':
     test = 'st_2d_dyn'
+    # test = 'dc_2d_stat'
+    # test = 'dc_3d_stat'
+    # test = 'dc_2d_dyn'
     if test == 'st_2d_stat':
         app = navier_stokes.SchaeferTurek2d(h=0.2)
         static(application=app)
@@ -108,6 +115,7 @@ if __name__ == '__main__':
     elif test == 'st_2d_dyn':
         app = navier_stokes.SchaeferTurek2d(h=0.3, mu=0.002, errordrag=False)
         dynamic(application=app, T=50, dt=0.25)
+        # dynamic(application=app, T=50, dt=0.25, semi_implicit=True)
         # app = navier_stokes.Poiseuille2d(h=0.2, mu=0.1)
     elif test == 'st_3d_stat':
         app = navier_stokes.SchaeferTurek3d(h=0.5)
@@ -119,3 +127,12 @@ if __name__ == '__main__':
         # app = navier_stokes.Poiseuille3d(h=0.5, mu=0.01)
         # app = navier_stokes.BackwardFacingStep3d(h=0.1, mu=0.001)
         dynamic(application=app, T=50, dt=0.25)
+    elif test == 'dc_2d_stat':
+        app = navier_stokes.DrivenCavity2d(h=0.1)
+        static(application=app)
+    elif test == 'dc_2d_dyn':
+        app = navier_stokes.DrivenCavity2d(h=0.1, mu=1e-4)
+        dynamic(application=app, T=50, dt=0.25)
+    elif test == 'dc_3d_stat':
+        app = navier_stokes.DrivenCavity3d(h=0.2)
+        static(application=app)

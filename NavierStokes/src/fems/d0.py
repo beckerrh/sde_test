@@ -56,6 +56,7 @@ class D0():
             cells = self.mesh.cellsOfFaces[faces,0]
             normalsS = self.mesh.normals[faces]
             dS = linalg.norm(normalsS, axis=1)
+            # print(f"{color=} {faces.shape=} {cells.shape=} {dS.shape=} {b[cells].shape=}")
             res += dS*b[cells]
             omega += np.sum(dS)
         return res/omega

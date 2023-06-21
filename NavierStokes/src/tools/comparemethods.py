@@ -97,12 +97,10 @@ class CompareMethods(object):
         if self.paramname in paramsdict: paramsdict.pop(self.paramname)
         for pname,params in paramsdict.items():
             if isinstance(params, str): paramsdict[pname] = [params]
-
         def dicttensorproduct(paramsdicts):
             import itertools
             paramslist = [[(name, param) for param in params] for name, params in paramsdicts.items()]
             return [{p[0]: p[1] for p in params} for params in itertools.product(*paramslist)]
-
         paramslist = dicttensorproduct(paramsdict)
         self.methods = {}
         import copy
@@ -249,7 +247,8 @@ class CompareMethods(object):
                         latexwriter.append(**kwargs, name = f"{key}-{name}", values=newdict, percentage=True)
                 latexwriter.append(**kwargs, name=key, values=sumdict)
             else:
-                iserr = len(keysplit) >= 2 and keysplit[0] == 'err'
+                iserr = len(keysplit) >= 2 and keysplit[0][:3] == 'err'
+                # print(f"{iserr=} {keysplit=} {keysplit[0][:3]=}")
                 kwargs['redrate'] = iserr and (paramname=="ncells")
                 kwargs['diffandredrate'] = not kwargs['redrate'] and (paramname=="ncells")
                 kwargs['dim'] = self.dim

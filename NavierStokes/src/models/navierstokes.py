@@ -1,7 +1,7 @@
 import numpy as np
 from src.models.stokes import Stokes
 from src import fems, meshes, solvers
-from src.solvers import linalg
+from src.linalg import linalg
 
 class NavierStokes(Stokes):
     def __format__(self, spec):
@@ -29,32 +29,33 @@ class NavierStokes(Stokes):
         return self.static(mode='newton',sdata=sdata)
     def computeForm(self, u):
         d = self.Astokes.matvec(u)
-        v = self._split(u)[0]
-        dv = self._split(d)[0]
+        v = self.vectorview.get_part(0,u)
+        dv = self.vectorview.get_part(0,d)
+        # v = self._split(u)[0]
+        # dv = self._split(d)[0]
         self.computeFormConvection(dv, v)
         self.timer.add('form')
         return d
+    def rhs_dynamic(self, rhs, u, Aconst, time, dt, theta, semi_implicit):
+        super().rhs_dynamic(rhs, u, Aconst, time, dt, theta, semi_implicit)
+        if semi_implicit:
+            self.computeFormConvection(rhs, 0.5*u)
+
+
     def computeMatrix(self, u=None, coeffmass=None):
         # X = self.Astokes.copy()
         X = super().computeMatrix(u=u, coeffmass=coeffmass)
-        v = self._split(u)[0]
+        # v = self._split(u)[0]
+        v = self.vectorview.get_part(0,u)
         theta = 1
         if hasattr(self,'uold'): theta = 0.5
         X.A += theta*self.computeMatrixConvection(v)
         self.timer.add('matrix')
         return X
-    # def rhs_dynamic(self, rhs, u, Aimp, time, dt, theta):
-    #     self.Mass.dot(rhs, 1 / (theta * theta * dt), u)
-    #     rhs += (theta - 1) / theta * Aimp.dot(u)
-    #     rhs2 = self.computeRhs()
-    #     rhs += (1 / theta) * rhs2
     def defect_dynamic(self, f, u):
         y = super().computeForm(u)-f
         self.Mass.dot(y, 1 / (self.theta * self.dt), u)
-        v = self._split(u)[0]
-        vold = self._split(self.uold)[0]
-        dv = self._split(y)[0]
-        self.computeFormConvection(dv, 0.5*(v+vold))
+        self.computeFormConvection(y, 0.5*(u+self.uold))
         self.timer.add('defect_dynamic')
         return y
     def computeMatrixConstant(self, coeffmass, coeffmassold=0):
@@ -65,35 +66,33 @@ class NavierStokes(Stokes):
         rt = fems.rt0.RT0(mesh=self.mesh)
         self.convdata.betart = rt.interpolateCR1(v, self.stack_storage)
         self.convdata.beta = rt.toCell(self.convdata.betart)
-    def computeFormConvection(self, dv, v):
+    def computeFormConvection(self, du, u):
         dim = self.mesh.dimension
-        self._compute_conv_data(v)
+        self._compute_conv_data(self.vectorview.get_part(0,u))
         colorsdirichlet = self.problemdata.bdrycond.colorsOfType("Dirichlet")
-        # vdir = self.femv.interpolateBoundary(colorsdirichlet, self.problemdata.bdrycond.fct).ravel()
-        # self.femv.massDotBoundary(dv, vdir, colors=colorsdirichlet, ncomp=self.ncomp, coeff=np.minimum(self.convdata.betart, 0))
         for icomp in range(dim):
+            dv, v = self.vectorview.get(0,icomp,du), self.vectorview.get(0,icomp,u)
             fdict = {col: self.problemdata.bdrycond.fct[col][icomp] for col in colorsdirichlet if col in self.problemdata.bdrycond.fct.keys()}
-            vdir = self.femv.fem.interpolateBoundary(colorsdirichlet, fdict)
-            self.femv.fem.massDotBoundary(self._getv(dv, icomp), vdir, colors=colorsdirichlet, coeff=np.minimum(self.convdata.betart, 0))
-            self.femv.fem.computeFormTransportCellWise(self._getv(dv, icomp), self._getv(v, icomp), self.convdata, type='centered')
-            self.femv.fem.computeFormJump(self._getv(dv, icomp), self._getv(v, icomp), self.convdata.betart)
+            vdir = self.femv.interpolateBoundary(colorsdirichlet, fdict)
+            self.femv.massDotBoundary(dv, vdir, colors=colorsdirichlet, coeff=np.minimum(self.convdata.betart, 0))
+            self.femv.computeFormTransportCellWise(dv, v, self.convdata, type='centered')
+            self.femv.computeFormJump(dv, v, self.convdata.betart)
     def computeMatrixConvection(self, v):
         if not hasattr(self.convdata,'beta'): self._compute_conv_data(v)
-        A = self.femv.fem.computeMatrixTransportCellWise(self.convdata, type='centered')
-        A += self.femv.fem.computeMatrixJump(self.convdata.betart)
+        A = self.femv.computeMatrixTransportCellWise(self.convdata, type='centered')
+        A += self.femv.computeMatrixJump(self.convdata.betart)
         if self.singleA:
             return A
         return linalg.matrix2systemdiagonal(A, self.ncomp).tocsr()
-    def computeBdryNormalFluxNitsche(self, v, p, colors):
-        flux = super().computeBdryNormalFluxNitsche(v,p,colors)
+    def computeBdryNormalFluxNitsche(self, u, colors):
+        flux = super().computeBdryNormalFluxNitsche(u,colors)
         if self.convdata.betart is None : return flux
         ncomp, bdryfct = self.ncomp, self.problemdata.bdrycond.fct
-        # vdir = self.femv.interpolateBoundary(colors, bdryfct).ravel()
         for icomp in range(ncomp):
             fdict = {col: bdryfct[col][icomp] for col in colors if col in bdryfct.keys()}
-            vdir = self.femv.fem.interpolateBoundary(colors, fdict)
+            vdir = self.femv.interpolateBoundary(colors, fdict)
+            v = self.vectorview.get(0, icomp, u)
             for i,color in enumerate(colors):
-                # flux[icomp,i] -= self.femv.fem.massDotBoundary(b=None, f=v[icomp::ncomp]-vdir[icomp::ncomp], colors=[color], coeff=np.minimum(self.convdata.betart, 0))
-                flux[icomp, i] -= self.femv.fem.massDotBoundary(b=None, f=self._getv(v, icomp) - vdir[icomp], colors=[color],
+                flux[icomp, i] -= self.femv.massDotBoundary(b=None, f=v - vdir, colors=[color],
                                                         coeff=np.minimum(self.convdata.betart, 0))
         return flux
