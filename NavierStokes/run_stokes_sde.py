@@ -124,6 +124,7 @@ class DataTk():
             fig, canvas = self.canvases[k].figure, self.canvases[k]
             fig.clear()
             plotter(fig)
+            canvas.draw()
         self.root.focus_force()
 
 
